@@ -1,78 +1,190 @@
+# This code is submitted as a part of Linear Optimisation Assignment Problem 1.
+#
+# Team Members:
+#   Bhukya Roopak Krishna (MS21BTECH11012)
+#   K Vivek Kumar (CS21BTECH11026)
+#   Balaji Tanushree Singh (ES21BTECH11009)
+#
+# Github Repo: https://github.com/K-Vivek-Kumar/linear-optimization.git
+
+
+"""
+Assumption
+1. Rak of A is n
+
+Implement the simplex algorithm to maximize the objective function, You need to implement the method discussed in class.
+
+Input: CSV file with m+1 rows and n+1 column.
+        The first row excluding the last element is the cost vector c of length n
+        The last column excluding the top element is the constraint vector b of length m
+        Rows two to m+1 and column one to n is the matrix A of size m*n
+
+Output: You need to print the sequence of vertices visited and the value of the objective function at that vertex
+"""
+
+
 import numpy as np
 import pandas as pd
 
 
-def simplex_algorithm(csv_file, max_iterations=1000):
+input_file = "input4.csv"
+MAX_ITER = 1000
+EPSILON = 1e-4
 
-    data = pd.read_csv(csv_file, header=None)
-    c = data.iloc[0, :-1].values
-    A = data.iloc[1:-1, :-1].values
-    b = data.iloc[1:-1, -1].values
 
-    m, n = A.shape
+def load_data(file_path):
+    data_frame = pd.read_csv(file_path, header=None)
 
-    tableau = np.zeros((m + 1, n + 1))
-    tableau[:-1, :-1] = A
-    tableau[:-1, -1] = b
-    tableau[-1, :-1] = -c
-    tableau[-1, -1] = 0
+    matrix_A = data_frame.values[1:, :-1]
+    vector_b = data_frame.values[1:, -1]
+    cost_vector = data_frame.values[0, :-1]
 
-    iteration = 1
-    visited_vertices = set()
-    vertex_sequence = []
+    _, cols = matrix_A.shape
 
-    while iteration <= max_iterations:
+    if np.linalg.matrix_rank(matrix_A) != cols:
+        raise np.linalg.LinAlgError("A is not of full rank:", matrix_A)
 
-        pivot_col = np.argmin(tableau[-1, :-1])
+    return matrix_A, vector_b, cost_vector
 
-        pivot_col_values = tableau[:-1, pivot_col]
 
-        if np.all(pivot_col_values <= 0):
-            print("The problem is infeasible.")
-            return
+def get_initial_vertex(
+    constraint_matrix,
+    rhs_vector,
+) -> np.ndarray:
+    row_count, col_count = constraint_matrix.shape
+    random_generator = np.random.default_rng()
 
-        ratios = tableau[:-1, -1] / np.where(
-            pivot_col_values > 0, pivot_col_values, np.inf
+    max_times = MAX_ITER
+
+    for _ in range(max_times):
+        selected_rows = random_generator.choice(row_count, col_count, replace=False)
+        selected_matrix = constraint_matrix[selected_rows]
+        selected_rhs = rhs_vector[selected_rows]
+
+        if np.linalg.matrix_rank(selected_matrix) == col_count:
+            candidate_vertex = np.linalg.inv(selected_matrix) @ selected_rhs
+
+            if np.all(constraint_matrix @ candidate_vertex <= rhs_vector):
+                return candidate_vertex
+
+    raise RuntimeError("Unable to find")
+
+
+def apply_perturbation(original_b):
+    random_generator = np.random.default_rng()
+    perturbation_values = random_generator.uniform(
+        EPSILON, 2 * EPSILON, original_b.shape
+    )
+    perturbed_b = original_b + perturbation_values
+    return perturbed_b
+
+
+def compute_vertex_directions(matrix_A, vector_b, vertex):
+    tight_constraints = []
+    for i in range(len(vector_b)):
+        if np.isclose(matrix_A[i] @ vertex, vector_b[i]):
+            tight_constraints.append(i)
+
+    if not tight_constraints:
+        return None
+
+    matrix_A1 = matrix_A[tight_constraints, :]
+
+    if matrix_A1.shape[0] == matrix_A1.shape[1]:
+        return -np.linalg.inv(matrix_A1.T)
+    else:
+        return None
+
+
+def find_direction_to_next_vertex(
+    constraint_matrix,
+    constraint_vector,
+    objective_coefficients,
+    current_vertex,
+):
+    directions = compute_vertex_directions(
+        constraint_matrix, constraint_vector, current_vertex
+    )
+
+    if directions is None:
+        return False
+
+    direction_costs = directions @ objective_coefficients
+    positive_cost_directions = np.where(direction_costs > 0)[0]
+
+    if len(positive_cost_directions) == 0:
+        return True
+    else:
+        next_direction = directions[positive_cost_directions[0]]
+
+        if len(np.where(constraint_matrix @ next_direction > 0)[0]) == 0:
+            raise np.linalg.LinAlgError("Linear program is unbounded.")
+
+        non_tight_constraints = np.where(
+            ~np.isclose(constraint_matrix @ current_vertex, constraint_vector)
+        )
+        reduced_matrix = constraint_matrix[non_tight_constraints]
+        reduced_vector = constraint_vector[non_tight_constraints]
+
+        step_coefficients = (reduced_vector - reduced_matrix @ current_vertex) / (
+            reduced_matrix @ next_direction
+        )
+        step_size = np.min(step_coefficients[step_coefficients >= 0])
+
+        return current_vertex + step_size * next_direction
+
+
+def run_simplex_algorithm(
+    constraint_matrix,
+    constraint_vector,
+    objective_coefficients,
+    current_vertex,
+):
+    history_of_steps = []
+    max_iterations = MAX_ITER
+
+    while max_iterations:
+        history_of_steps.append(
+            [current_vertex, objective_coefficients.T @ current_vertex]
+        )
+        next_vertex = find_direction_to_next_vertex(
+            constraint_matrix, constraint_vector, objective_coefficients, current_vertex
         )
 
-        pivot_row = np.argmin(ratios)
+        if isinstance(next_vertex, bool):
+            return next_vertex, history_of_steps
+        else:
+            current_vertex = next_vertex
+        max_iterations -= 1
 
-        pivot_element = tableau[pivot_row, pivot_col]
-        tableau[pivot_row, :] /= pivot_element
-        for i in range(m + 1):
-            if i != pivot_row:
-                tableau[i, :] -= tableau[i, pivot_col] * tableau[pivot_row, :]
+    return False
 
-        current_vertex = tuple(tableau[:-1, -1])
-        objective_value = -tableau[-1, -1]
-        print(
-            f"Iteration {iteration}: Vertex={current_vertex}, Objective Value={objective_value}"
+
+def main():
+    constraint_matrix, constraint_vector, objective_coefficients = load_data(input_file)
+    perturbed_constraint_vector = np.empty_like(constraint_vector)
+    perturbed_constraint_vector[:] = constraint_vector
+    for i in range(MAX_ITER):
+        starting_vertex = get_initial_vertex(
+            constraint_matrix, perturbed_constraint_vector
         )
-
-        vertex_sequence.append((iteration, current_vertex, objective_value))
-
-        if current_vertex in visited_vertices:
-            print(
-                "Polytope Degeneracy Detected. The simplex method may cycle indefinitely."
-            )
+        is_solution_found, history_of_steps = run_simplex_algorithm(
+            constraint_matrix,
+            perturbed_constraint_vector,
+            objective_coefficients,
+            starting_vertex,
+        )
+        if is_solution_found:
+            print(f"Simplex algorithm converged in iteration {i+1}.")
+            for j in range(len(history_of_steps)):
+                print(
+                    f"Iteration {j+1}: x = {history_of_steps[j][0]}, cost = {history_of_steps[j][1]}"
+                )
             break
-        visited_vertices.add(current_vertex)
-
-        iteration += 1
-
-    if iteration > max_iterations:
-        print("The problem may be unbounded. Reached the maximum number of iterations.")
-
-    final_vertex = tableau[:-1, -1]
-    final_objective_value = -tableau[-1, -1]
-
-    print("\nFinal Optimal Solution:")
-    print("Vertices:", final_vertex)
-    print("Objective Value:", final_objective_value)
-
-    print("\nSequence of Vertices Visited:")
-    for step, vertex, obj_value in vertex_sequence:
-        print(f"Step {step}: Vertex {vertex}, Objective Value {obj_value}")
+        else:
+            perturbed_constraint_vector = apply_perturbation(constraint_vector)
+            print(f"Degeneracy detected in iteration {i+1}. LP has been perturbed.")
 
 
-simplex_algorithm("data.csv", max_iterations=1000)
+if __name__ == "__main__":
+    main()
